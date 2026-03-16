@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>电影清单管理</title>
+    <style>
+        :root {
+            --bg: #f4efe7;
+            --paper: #fffdf8;
+            --ink: #1f1b18;
+            --muted: #8b7c6b;
+            --line: #d8c9b8;
+            --accent: #a44831;
+            --accent-dark: #7f301e;
+            --danger: #b42318;
+            --shadow: 0 18px 40px rgba(77, 51, 35, 0.12);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "PingFang SC", "Noto Sans SC", sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(164, 72, 49, 0.14), transparent 30%),
+                linear-gradient(180deg, #f8f3eb 0%, #efe5d7 100%);
+            color: var(--ink);
+        }
+
+        .page {
+            width: min(1120px, calc(100% - 40px));
+            margin: 36px auto 48px;
+        }
+
+        .hero {
+            display: flex;
+            justify-content: space-between;
+            gap: 24px;
+            align-items: flex-start;
+            margin-bottom: 24px;
+        }
+
+        .hero h1 {
+            margin: 0;
+            font-size: clamp(2rem, 4vw, 3rem);
+            letter-spacing: 0.04em;
+        }
+
+        .hero p {
+            margin: 10px 0 0;
+            max-width: 680px;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .actions {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            align-items: center;
+        }
+
+        .user-panel {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .user-chip {
+            padding: 10px 14px;
+            border-radius: 999px;
+            background: rgba(255, 253, 248, 0.85);
+            border: 1px solid rgba(216, 201, 184, 0.9);
+            box-shadow: var(--shadow);
+            color: var(--ink);
+            font-weight: 600;
+        }
+
+        .inline-form {
+            margin: 0;
+        }
+
+        button {
+            border: 0;
+            border-radius: 999px;
+            padding: 12px 18px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            cursor: wait;
+            opacity: 0.6;
+            transform: none;
+        }
+
+        .button-primary {
+            color: #fff;
+            background: linear-gradient(135deg, var(--accent), #c9694f);
+            box-shadow: 0 12px 24px rgba(164, 72, 49, 0.2);
+        }
+
+        .button-secondary {
+            color: var(--ink);
+            background: rgba(255, 253, 248, 0.85);
+            border: 1px solid rgba(216, 201, 184, 0.9);
+            box-shadow: var(--shadow);
+        }
+
+        .button-danger {
+            color: #fff;
+            background: linear-gradient(135deg, #b5412d, #d06b4b);
+            box-shadow: 0 12px 24px rgba(181, 65, 45, 0.22);
+        }
+
+        .shell {
+            background: rgba(255, 253, 248, 0.88);
+            border: 1px solid rgba(216, 201, 184, 0.95);
+            border-radius: 28px;
+            box-shadow: var(--shadow);
+            overflow: hidden;
+            backdrop-filter: blur(12px);
+        }
+
+        .status-bar {
+            display: none;
+            padding: 16px 24px 0;
+        }
+
+        .status-bar.show {
+            display: block;
+        }
+
+        .message {
+            border-radius: 16px;
+            padding: 12px 16px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .message.info {
+            background: #f8efe4;
+            color: #6f4428;
+        }
+
+        .message.error {
+            background: #fdecec;
+            color: #8f1d17;
+        }
+
+        .table-wrap {
+            height: 540px;
+            overflow: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            table-layout: fixed;
+        }
+
+        thead th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: rgba(255, 251, 245, 0.96);
+            color: var(--muted);
+            font-size: 13px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        th, td {
+            border-bottom: 1px solid var(--line);
+            padding: 16px 14px;
+            text-align: left;
+        }
+
+        tbody tr {
+            transition: background 0.18s ease, opacity 0.18s ease;
+        }
+
+        tbody tr:hover {
+            background: rgba(164, 72, 49, 0.04);
+        }
+
+        tbody tr.deleted {
+            opacity: 0.45;
+            text-decoration: line-through;
+        }
+
+        .delete-col {
+            width: 68px;
+            text-align: center;
+        }
+
+        .index-col {
+            width: 88px;
+        }
+
+        .delete-btn {
+            width: 30px;
+            height: 30px;
+            padding: 0;
+            border-radius: 999px;
+            background: rgba(180, 35, 24, 0.1);
+            color: var(--danger);
+            font-size: 18px;
+            line-height: 30px;
+            box-shadow: none;
+        }
+
+        .delete-btn:hover {
+            background: rgba(180, 35, 24, 0.18);
+        }
+
+        .cell-value {
+            min-height: 24px;
+            line-height: 24px;
+        }
+
+        .cell-input {
+            width: 100%;
+            border: 1px solid transparent;
+            border-radius: 12px;
+            padding: 10px 12px;
+            font-size: 15px;
+            background: rgba(250, 244, 237, 0.95);
+            color: var(--ink);
+            outline: none;
+        }
+
+        .cell-input:focus {
+            border-color: rgba(164, 72, 49, 0.42);
+            background: #fff;
+            box-shadow: 0 0 0 4px rgba(164, 72, 49, 0.08);
+        }
+
+        .cell-input::placeholder {
+            color: #a19384;
+        }
+
+        .placeholder {
+            color: #a19384;
+        }
+
+        .footer-actions {
+            display: none;
+            gap: 12px;
+            justify-content: flex-end;
+            padding: 0 24px 24px;
+        }
+
+        .footer-actions.show {
+            display: flex;
+        }
+
+        .import-panel {
+            display: none;
+            border-top: 1px solid rgba(216, 201, 184, 0.8);
+            padding: 24px;
+            background: rgba(248, 243, 235, 0.75);
+        }
+
+        .import-panel.show {
+            display: block;
+        }
+
+        .import-grid {
+            display: grid;
+            gap: 14px;
+        }
+
+        .import-steps {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--ink);
+            line-height: 1.7;
+        }
+
+        .field label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .field input,
+        .field textarea {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 12px 14px;
+            font: inherit;
+            background: rgba(255, 253, 248, 0.95);
+        }
+
+        .field textarea {
+            min-height: 132px;
+            resize: vertical;
+        }
+
+        .hint {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .import-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            margin-top: 16px;
+        }
+
+        @media (max-width: 860px) {
+            .hero {
+                flex-direction: column;
+            }
+
+            .actions {
+                width: 100%;
+                justify-content: flex-start;
+            }
+
+            .table-wrap {
+                height: auto;
+                max-height: 70vh;
+            }
+
+            th, td {
+                padding: 14px 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <section class="hero">
+            <div>
+                <h1>电影清单</h1>
+                <p>一个专注于记录与维护观影列表的轻量表格。默认按影名字母顺序排列，所有新增、修改、删除都统一在编辑模式里完成。</p>
+            </div>
+            <div class="actions">
+                <div class="user-panel">
+                    <span class="user-chip">当前用户：{{ current_user.username }}</span>
+                    <form class="inline-form" action="/logout" method="post">
+                        <button class="button-secondary" type="submit">退出登录</button>
+                    </form>
+                </div>
+                <button id="copy-button" class="button-secondary" type="button">复制清单</button>
+                <button id="toggle-import" class="button-secondary" type="button">Import from</button>
+                <button id="edit-button" class="button-primary" type="button">Edit</button>
+            </div>
+        </section>
+
+        <section class="shell">
+            <div id="status-bar" class="status-bar">
+                <div id="status-message" class="message info"></div>
+            </div>
+
+            <div id="import-panel" class="import-panel">
+                <div class="import-grid">
+                    <div class="field">
+                        <label for="douban-url">豆瓣页面 URL</label>
+                        <input id="douban-url" type="text" placeholder="https://movie.douban.com/mine?status=collect">
+                    </div>
+                    <div class="field">
+                        <label for="douban-cookie">Cookie（可选）</label>
+                        <textarea id="douban-cookie" placeholder="如果页面需要登录，可在这里粘贴浏览器 Cookie。"></textarea>
+                    </div>
+                    <div class="field">
+                        <label for="douban-html">页面 HTML（可选）</label>
+                        <textarea id="douban-html" placeholder="如果不方便直接抓取，也可以把豆瓣“看过”页面源码粘贴到这里。"></textarea>
+                    </div>
+                </div>
+                <ol class="import-steps">
+                    <li>推荐直接粘贴豆瓣“我看过的影视”页面 URL，比如 `https://movie.douban.com/mine?status=collect`。</li>
+                    <li>系统会自动沿着“后页”继续抓取，不需要你手动复制每一页源代码。</li>
+                    <li>如果 URL 因登录限制抓不到，再补充 Cookie；只有 URL 方式才会自动翻页。</li>
+                </ol>
+                <p class="hint">最多导入 1000 条记录，并按 `title + director` 去重。若 URL 无法访问，可以直接粘贴页面 HTML，但只会解析你粘贴进去的那一页内容。</p>
+                <div class="import-actions">
+                    <button id="close-import" class="button-secondary" type="button">关闭</button>
+                    <button id="submit-import" class="button-primary" type="button">开始导入</button>
+                </div>
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr id="table-head-row"></tr>
+                    </thead>
+                    <tbody id="movie-table-body"></tbody>
+                </table>
+            </div>
+
+            <div id="footer-actions" class="footer-actions">
+                <button id="delete-selected-button" class="button-secondary" type="button">删除已选</button>
+                <button id="delete-all-button" class="button-danger" type="button">一键删除</button>
+                <button id="cancel-button" class="button-secondary" type="button">Cancel</button>
+                <button id="save-button" class="button-primary" type="button">Save</button>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const initialMovies = {{ movies|tojson }};
+
+        const state = {
+            isEditing: false,
+            isSaving: false,
+            isImporting: false,
+            importPanelVisible: false,
+            movies: structuredClone(initialMovies),
+            draftMovies: [],
+            originalMovies: [],
+        };
+
+        const elements = {
+            editButton: document.getElementById("edit-button"),
+            copyButton: document.getElementById("copy-button"),
+            saveButton: document.getElementById("save-button"),
+            cancelButton: document.getElementById("cancel-button"),
+            footerActions: document.getElementById("footer-actions"),
+            deleteSelectedButton: document.getElementById("delete-selected-button"),
+            deleteAllButton: document.getElementById("delete-all-button"),
+            tableHeadRow: document.getElementById("table-head-row"),
+            tableBody: document.getElementById("movie-table-body"),
+            statusBar: document.getElementById("status-bar"),
+            statusMessage: document.getElementById("status-message"),
+            importPanel: document.getElementById("import-panel"),
+            toggleImportButton: document.getElementById("toggle-import"),
+            closeImportButton: document.getElementById("close-import"),
+            submitImportButton: document.getElementById("submit-import"),
+            doubanUrl: document.getElementById("douban-url"),
+            doubanCookie: document.getElementById("douban-cookie"),
+            doubanHtml: document.getElementById("douban-html"),
+        };
+
+        function showMessage(message, type = "info") {
+            elements.statusMessage.textContent = message;
+            elements.statusMessage.className = `message ${type}`;
+            elements.statusBar.classList.add("show");
+        }
+
+        function clearMessage() {
+            elements.statusBar.classList.remove("show");
+            elements.statusMessage.textContent = "";
+        }
+
+        function sortedMovies(movies) {
+            return [...movies].sort((left, right) => {
+                const titleCompare = left.title.localeCompare(right.title, "en", { sensitivity: "base" });
+                if (titleCompare !== 0) {
+                    return titleCompare;
+                }
+                const directorCompare = left.director.localeCompare(right.director, "en", { sensitivity: "base" });
+                if (directorCompare !== 0) {
+                    return directorCompare;
+                }
+                return (left.id || 0) - (right.id || 0);
+            });
+        }
+
+        function createBlankRow() {
+            return {
+                id: null,
+                director: "",
+                title: "",
+                _deleted: false,
+                _isNew: true,
+                _selected: false,
+            };
+        }
+
+        function syncEditState() {
+            elements.footerActions.classList.toggle("show", state.isEditing);
+            elements.editButton.style.display = state.isEditing ? "none" : "inline-flex";
+        }
+
+        function renderHead() {
+            const columns = [];
+
+            if (state.isEditing) {
+                columns.push('<th class="delete-col">选择</th>');
+                columns.push('<th class="delete-col">删除</th>');
+            }
+
+            columns.push('<th class="index-col">序号</th>');
+            columns.push("<th>导演</th>");
+            columns.push("<th>影名</th>");
+            elements.tableHeadRow.innerHTML = columns.join("");
+        }
+
+        function getRenderableRows() {
+            const rows = state.isEditing ? state.draftMovies : state.movies;
+            return rows.filter((row) => !(row._deleted && row._isNew));
+        }
+
+        function renderBody() {
+            const rows = getRenderableRows();
+
+            if (!rows.length) {
+                const colspan = state.isEditing ? 4 : 3;
+                const adjustedColspan = state.isEditing ? 5 : colspan;
+                elements.tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="${adjustedColspan}" class="placeholder">还没有电影记录，点击 Edit 开始新增第一条。</td>
+                    </tr>
+                `;
+                return;
+            }
+
+            let visibleIndex = 0;
+            elements.tableBody.innerHTML = rows.map((row, rowIndex) => {
+                const shouldHide = Boolean(row._deleted && !row._isNew);
+                if (!shouldHide) {
+                    visibleIndex += 1;
+                }
+
+                const selectCell = state.isEditing
+                    ? `<td class="delete-col">${
+                        row._isNew
+                            ? ""
+                            : `<input type="checkbox" data-action="toggle-select" data-row-index="${rowIndex}" ${row._selected ? "checked" : ""}>`
+                    }</td>`
+                    : "";
+
+                const deleteCell = state.isEditing
+                    ? `<td class="delete-col">${
+                        row._isNew
+                            ? ""
+                            : `<button class="delete-btn" type="button" data-action="toggle-delete" data-row-index="${rowIndex}">${row._deleted ? "+" : "×"}</button>`
+                    }</td>`
+                    : "";
+
+                const directorCell = state.isEditing
+                    ? `<input class="cell-input" data-field="director" data-row-index="${rowIndex}" value="${escapeHtml(row.director || "")}" placeholder="待输入">`
+                    : `<div class="cell-value ${row.director ? "" : "placeholder"}">${escapeHtml(row.director || "待输入")}</div>`;
+
+                const titleCell = state.isEditing
+                    ? `<input class="cell-input" data-field="title" data-row-index="${rowIndex}" value="${escapeHtml(row.title || "")}" placeholder="待输入">`
+                    : `<div class="cell-value ${row.title ? "" : "placeholder"}">${escapeHtml(row.title || "待输入")}</div>`;
+
+                return `
+                    <tr class="${row._deleted ? "deleted" : ""}">
+                        ${selectCell}
+                        ${deleteCell}
+                        <td>${shouldHide ? "-" : visibleIndex}</td>
+                        <td>${directorCell}</td>
+                        <td>${titleCell}</td>
+                    </tr>
+                `;
+            }).join("");
+        }
+
+        function render() {
+            syncEditState();
+            renderHead();
+            renderBody();
+        }
+
+        function enterEditMode() {
+            state.isEditing = true;
+            state.originalMovies = structuredClone(state.movies);
+            state.draftMovies = sortedMovies(state.movies).map((movie) => ({
+                ...movie,
+                _deleted: false,
+                _isNew: false,
+                _selected: false,
+            }));
+            state.draftMovies.push(createBlankRow());
+            clearMessage();
+            render();
+        }
+
+        function exitEditMode() {
+            state.isEditing = false;
+            state.draftMovies = [];
+            state.originalMovies = [];
+            render();
+        }
+
+        function cancelEdit() {
+            state.movies = structuredClone(state.originalMovies);
+            exitEditMode();
+            showMessage("已取消本次编辑，表格恢复到编辑前状态。");
+        }
+
+        function updateDraftRow(index, field, value) {
+            state.draftMovies[index][field] = value;
+        }
+
+        function toggleDelete(index) {
+            const row = state.draftMovies[index];
+            if (!row || row._isNew) {
+                return;
+            }
+            row._deleted = !row._deleted;
+            render();
+        }
+
+        function toggleSelect(index) {
+            const row = state.draftMovies[index];
+            if (!row || row._isNew) {
+                return;
+            }
+            row._selected = !row._selected;
+        }
+
+        function deleteSelectedRows() {
+            if (!state.isEditing) {
+                return;
+            }
+
+            const selectedRows = state.draftMovies.filter((row) => !row._isNew && row._selected && !row._deleted);
+            if (!selectedRows.length) {
+                showMessage("请先勾选要删除的记录。", "error");
+                return;
+            }
+
+            const confirmed = window.confirm(`确定要删除已勾选的 ${selectedRows.length} 条记录吗？点击 Save 后会真正生效。`);
+            if (!confirmed) {
+                return;
+            }
+
+            state.draftMovies = state.draftMovies.map((row) => (
+                row._selected ? { ...row, _deleted: true, _selected: false } : row
+            ));
+            showMessage(`已标记删除 ${selectedRows.length} 条记录，点击 Save 生效，或点击 Cancel 撤销。`);
+            render();
+        }
+
+        function markAllRowsDeleted() {
+            if (!state.isEditing) {
+                return;
+            }
+
+            const hasExistingRows = state.draftMovies.some((row) => !row._isNew && !row._deleted);
+            if (!hasExistingRows) {
+                showMessage("当前没有可删除的已有记录。", "error");
+                return;
+            }
+
+            const confirmed = window.confirm("确定要将当前所有电影记录标记为删除吗？点击 Save 后会真正清空列表。");
+            if (!confirmed) {
+                return;
+            }
+
+            state.draftMovies = state.draftMovies.map((row) => (
+                row._isNew
+                    ? { ...row, director: "", title: "", _selected: false }
+                    : { ...row, _deleted: true, _selected: false }
+            ));
+            showMessage("已将全部记录标记为删除，点击 Save 生效，或点击 Cancel 撤销。");
+            render();
+        }
+
+        function buildCopyText() {
+            return sortedMovies(state.movies)
+                .map((movie, index) => `${index + 1}.《${movie.title}》（${movie.director}）`)
+                .join("\n");
+        }
+
+        async function copyMovieList() {
+            const text = buildCopyText();
+            if (!text) {
+                showMessage("当前没有可复制的电影记录。", "error");
+                return;
+            }
+
+            try {
+                await navigator.clipboard.writeText(text);
+                showMessage(`已复制 ${state.movies.length} 条记录。`);
+            } catch (error) {
+                showMessage("复制失败，请检查浏览器是否允许剪贴板权限。", "error");
+            }
+        }
+
+        function buildPayload() {
+            return state.draftMovies
+                .filter((row) => !row._deleted)
+                .map((row) => ({
+                    id: row.id,
+                    director: (row.director || "").trim(),
+                    title: (row.title || "").trim(),
+                }));
+        }
+
+        async function saveDraft() {
+            if (state.isSaving) {
+                return;
+            }
+
+            state.isSaving = true;
+            elements.saveButton.disabled = true;
+            elements.cancelButton.disabled = true;
+
+            try {
+                const response = await fetch("/api/movies/save", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ movies: buildPayload() }),
+                });
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || "保存失败。");
+                }
+
+                state.movies = result.movies;
+                exitEditMode();
+                showMessage(result.message || "保存成功。");
+            } catch (error) {
+                showMessage(error.message, "error");
+            } finally {
+                state.isSaving = false;
+                elements.saveButton.disabled = false;
+                elements.cancelButton.disabled = false;
+            }
+        }
+
+        async function submitImport() {
+            if (state.isImporting) {
+                return;
+            }
+
+            if (state.isEditing) {
+                showMessage("请先完成当前编辑并保存或取消，再执行导入。", "error");
+                return;
+            }
+
+            state.isImporting = true;
+            elements.submitImportButton.disabled = true;
+
+            try {
+                const response = await fetch("/api/import", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        url: elements.doubanUrl.value.trim(),
+                        cookie: elements.doubanCookie.value.trim(),
+                        html: elements.doubanHtml.value,
+                    }),
+                });
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || "导入失败。");
+                }
+
+                state.movies = result.movies;
+                state.importPanelVisible = false;
+                elements.importPanel.classList.remove("show");
+                render();
+                showMessage(result.message || "导入成功。");
+            } catch (error) {
+                showMessage(error.message, "error");
+            } finally {
+                state.isImporting = false;
+                elements.submitImportButton.disabled = false;
+            }
+        }
+
+        function escapeHtml(value) {
+            return String(value)
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;");
+        }
+
+        elements.copyButton.addEventListener("click", copyMovieList);
+        elements.editButton.addEventListener("click", enterEditMode);
+        elements.deleteSelectedButton.addEventListener("click", deleteSelectedRows);
+        elements.deleteAllButton.addEventListener("click", markAllRowsDeleted);
+        elements.cancelButton.addEventListener("click", cancelEdit);
+        elements.saveButton.addEventListener("click", saveDraft);
+        elements.toggleImportButton.addEventListener("click", () => {
+            if (state.isEditing) {
+                showMessage("编辑模式下暂不支持导入，请先保存或取消当前修改。", "error");
+                return;
+            }
+            state.importPanelVisible = !state.importPanelVisible;
+            elements.importPanel.classList.toggle("show", state.importPanelVisible);
+        });
+        elements.closeImportButton.addEventListener("click", () => {
+            state.importPanelVisible = false;
+            elements.importPanel.classList.remove("show");
+        });
+        elements.submitImportButton.addEventListener("click", submitImport);
+
+        elements.tableBody.addEventListener("input", (event) => {
+            const field = event.target.dataset.field;
+            const rowIndex = Number(event.target.dataset.rowIndex);
+            if (!field || Number.isNaN(rowIndex)) {
+                return;
+            }
+            updateDraftRow(rowIndex, field, event.target.value);
+        });
+
+        elements.tableBody.addEventListener("click", (event) => {
+            const { action, rowIndex } = event.target.dataset;
+            if (action === "toggle-select") {
+                toggleSelect(Number(rowIndex));
+                return;
+            }
+            if (action !== "toggle-delete") {
+                return;
+            }
+            toggleDelete(Number(rowIndex));
+        });
+
+        state.movies = sortedMovies(state.movies);
+        render();
+    </script>
+</body>
+</html>

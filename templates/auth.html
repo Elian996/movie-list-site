@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% if mode == "register" %}注册{% else %}登录{% endif %} - 电影清单管理</title>
+    <style>
+        :root {
+            --ink: #1f1b18;
+            --muted: #8b7c6b;
+            --line: #d8c9b8;
+            --accent: #a44831;
+            --paper: rgba(255, 253, 248, 0.92);
+            --shadow: 0 18px 40px rgba(77, 51, 35, 0.12);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            font-family: "PingFang SC", "Noto Sans SC", sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top left, rgba(164, 72, 49, 0.14), transparent 30%),
+                linear-gradient(180deg, #f8f3eb 0%, #efe5d7 100%);
+        }
+
+        .card {
+            width: min(520px, 100%);
+            border-radius: 28px;
+            padding: 28px;
+            background: var(--paper);
+            border: 1px solid rgba(216, 201, 184, 0.95);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(12px);
+        }
+
+        h1 {
+            margin: 0 0 10px;
+            font-size: 34px;
+        }
+
+        .lead {
+            margin: 0 0 24px;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            min-width: 108px;
+            padding: 12px 16px;
+            border-radius: 999px;
+            text-decoration: none;
+            color: var(--ink);
+            border: 1px solid rgba(216, 201, 184, 0.95);
+            background: rgba(255, 253, 248, 0.9);
+        }
+
+        .tab.active {
+            color: #fff;
+            background: linear-gradient(135deg, var(--accent), #c9694f);
+            border-color: transparent;
+        }
+
+        .message {
+            margin-bottom: 16px;
+            border-radius: 16px;
+            padding: 12px 14px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .message.error {
+            color: #8f1d17;
+            background: #fdecec;
+        }
+
+        .message.success {
+            color: #6f4428;
+            background: #f8efe4;
+        }
+
+        .field {
+            margin-bottom: 16px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        input {
+            width: 100%;
+            padding: 14px 16px;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            font: inherit;
+            background: rgba(255, 253, 248, 0.95);
+        }
+
+        .hint {
+            margin: 18px 0 0;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        button {
+            width: 100%;
+            border: 0;
+            border-radius: 999px;
+            padding: 14px 18px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            color: #fff;
+            background: linear-gradient(135deg, var(--accent), #c9694f);
+            box-shadow: 0 12px 24px rgba(164, 72, 49, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <h1>{% if mode == "register" %}创建账号{% else %}欢迎回来{% endif %}</h1>
+        <p class="lead">适合你和朋友一起使用的轻量电影清单。用户名固定 4 位，密码固定 8 位，均限制为字母或数字。</p>
+
+        <div class="tabs">
+            <a class="tab {% if mode == 'login' %}active{% endif %}" href="/login">登录</a>
+            <a class="tab {% if mode == 'register' %}active{% endif %}" href="/register">注册</a>
+        </div>
+
+        {% if error %}
+            <div class="message error">{{ error }}</div>
+        {% endif %}
+        {% if success %}
+            <div class="message success">{{ success }}</div>
+        {% endif %}
+
+        {% if mode == "register" %}
+            <form action="/register" method="post">
+                <div class="field">
+                    <label for="username">用户名</label>
+                    <input id="username" name="username" value="{{ username }}" maxlength="4" pattern="[A-Za-z0-9]{4}" placeholder="例如 A1B2" required>
+                </div>
+                <div class="field">
+                    <label for="password">密码</label>
+                    <input id="password" type="password" name="password" maxlength="8" pattern="[A-Za-z0-9]{8}" placeholder="8 位字母或数字" required>
+                </div>
+                <div class="field">
+                    <label for="confirm_password">确认密码</label>
+                    <input id="confirm_password" type="password" name="confirm_password" maxlength="8" pattern="[A-Za-z0-9]{8}" placeholder="再次输入密码" required>
+                </div>
+                <button type="submit">注册并进入</button>
+            </form>
+        {% else %}
+            <form action="/login" method="post">
+                <div class="field">
+                    <label for="username">用户名</label>
+                    <input id="username" name="username" value="{{ username }}" maxlength="4" pattern="[A-Za-z0-9]{4}" placeholder="4 位字母或数字" required>
+                </div>
+                <div class="field">
+                    <label for="password">密码</label>
+                    <input id="password" type="password" name="password" maxlength="8" pattern="[A-Za-z0-9]{8}" placeholder="8 位字母或数字" required>
+                </div>
+                <button type="submit">登录</button>
+            </form>
+        {% endif %}
+
+        <p class="hint">提示：为了方便小范围使用，当前规则是用户名必须恰好 4 位、密码必须恰好 8 位，且只能包含字母和数字。</p>
+    </main>
+</body>
+</html>
