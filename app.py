@@ -1,13 +1,19 @@
+import json
 import os
 import re
 import ssl
 import sqlite3
+import subprocess
+import sys
+import time
 from datetime import datetime
 from functools import wraps
 from html import unescape
+from html.parser import HTMLParser
+from http.cookiejar import CookieJar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 from flask import (
     Flask,
@@ -18,6 +24,7 @@ from flask import (
     session,
     url_for,
 )
+from itsdangerous import BadSignature, BadTimeSignature, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash, generate_password_hash
 
 try:
@@ -36,11 +43,144 @@ DOUBAN_HEADERS = {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/122.0.0.0 Safari/537.36"
-    )
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Referer": "https://movie.douban.com/",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Upgrade-Insecure-Requests": "1",
 }
+
+DOUBAN_WARMUP_URLS = (
+    "https://www.douban.com/",
+    "https://movie.douban.com/",
+)
+
+DOUBAN_BROWSER_PAGE_SCRIPT = r"""
+(() => {
+  const nextLink =
+    document.querySelector('.paginator .next a[href]') ||
+    document.querySelector('link[rel="next"][href]') ||
+    Array.from(document.querySelectorAll('a[href]')).find((node) => {
+      const text = (node.textContent || '').trim();
+      return text === '后页' || text === '后页>';
+    });
+
+  return JSON.stringify({
+    url: location.href,
+    title: document.title,
+    nextHref: nextLink ? (nextLink.href || nextLink.getAttribute('href') || '') : '',
+    html: document.documentElement.outerHTML
+  });
+})()
+""".strip()
+
+BROWSER_LABELS = {
+    "auto": "自动检测",
+    "chrome": "Google Chrome",
+    "safari": "Safari",
+}
+
+BROWSER_APP_NAMES = {
+    "chrome": "Google Chrome",
+    "safari": "Safari",
+}
+
+
+class DoubanCollectionHTMLParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.stack = []
+        self.item_depth = 0
+        self.current_item = None
+        self.capture_title_depth = None
+        self.capture_intro_depth = None
+        self.capture_subject_link_depth = None
+        self.current_subject_link = []
+        self.pairs = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        class_names = set((attributes.get("class") or "").split())
+        href = attributes.get("href") or ""
+
+        self.stack.append({"tag": tag, "classes": class_names, "href": href})
+        depth = len(self.stack)
+
+        if "item" in class_names:
+            self.item_depth += 1
+            if self.item_depth == 1:
+                self.current_item = {"title": [], "intro": [], "subject_titles": []}
+
+        if not self.current_item:
+            return
+
+        if "title" in class_names and self.capture_title_depth is None:
+            self.capture_title_depth = depth
+
+        if "intro" in class_names and self.capture_intro_depth is None:
+            self.capture_intro_depth = depth
+
+        if self.capture_subject_link_depth is None and is_movie_subject_url(href):
+            self.capture_subject_link_depth = depth
+            self.current_subject_link = []
+
+    def handle_endtag(self, tag):
+        if not self.stack:
+            return
+
+        depth = len(self.stack)
+        node = self.stack.pop()
+
+        if self.capture_subject_link_depth == depth:
+            text = normalize_text("".join(self.current_subject_link))
+            if text and self.current_item is not None:
+                self.current_item["subject_titles"].append(text)
+            self.capture_subject_link_depth = None
+            self.current_subject_link = []
+
+        if self.capture_title_depth == depth:
+            self.capture_title_depth = None
+
+        if self.capture_intro_depth == depth:
+            self.capture_intro_depth = None
+
+        if "item" in node["classes"]:
+            if self.item_depth == 1 and self.current_item is not None:
+                pair = finalize_extracted_item(
+                    title="".join(self.current_item["title"]),
+                    intro="".join(self.current_item["intro"]),
+                    subject_titles=self.current_item["subject_titles"],
+                )
+                if pair:
+                    self.pairs.append(pair)
+                self.current_item = None
+            self.item_depth = max(self.item_depth - 1, 0)
+
+    def handle_data(self, data):
+        if not self.current_item:
+            return
+
+        if self.capture_title_depth is not None:
+            self.current_item["title"].append(data)
+
+        if self.capture_intro_depth is not None:
+            self.current_item["intro"].append(data)
+
+        if self.capture_subject_link_depth is not None:
+            self.current_subject_link.append(data)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+app.config["MAX_FORM_MEMORY_SIZE"] = 4 * 1024 * 1024
+
+
+def get_token_serializer():
+    return URLSafeTimedSerializer(app.secret_key, salt="douban-import")
 
 
 def get_connection():
@@ -184,6 +324,23 @@ def get_current_user():
     return get_user_by_id(user_id)
 
 
+def create_bookmarklet_token(user_id):
+    return get_token_serializer().dumps({"user_id": user_id})
+
+
+def parse_bookmarklet_token(token, max_age=7 * 24 * 60 * 60):
+    try:
+        payload = get_token_serializer().loads(token, max_age=max_age)
+    except (BadSignature, BadTimeSignature) as error:
+        raise ValueError("导入链接已失效，请回到电影清单页面重新生成后再试。") from error
+
+    user_id = payload.get("user_id")
+    if not user_id or not get_user_by_id(user_id):
+        raise ValueError("导入链接对应的用户不存在，请重新登录后再试。")
+
+    return user_id
+
+
 def login_required(route_function):
     @wraps(route_function)
     def wrapper(*args, **kwargs):
@@ -267,6 +424,40 @@ def replace_movies(rows, user_id):
         connection.close()
 
 
+def normalize_text(value):
+    return re.sub(r"\s+", " ", unescape(value or "")).strip()
+
+
+def clean_title_text(value):
+    title = normalize_text(strip_tags(value))
+    title = re.split(r"\s*/\s*", title, maxsplit=1)[0].strip()
+    return re.sub(r"\s+", " ", title)
+
+
+def is_movie_subject_url(url):
+    return bool(
+        re.search(
+            r"^(?:https?://movie\.douban\.com)?/subject/\d+/?",
+            (url or "").strip(),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def finalize_extracted_item(title="", intro="", subject_titles=None):
+    resolved_title = clean_title_text(title)
+    if not resolved_title:
+        for candidate in subject_titles or []:
+            resolved_title = clean_title_text(candidate)
+            if resolved_title:
+                break
+
+    director = parse_director_from_text(intro, title=resolved_title)
+    if resolved_title and director:
+        return (resolved_title, director)
+    return None
+
+
 def extract_title_and_director_pairs(html):
     pairs = []
 
@@ -294,6 +485,16 @@ def extract_title_and_director_pairs(html):
         if pairs:
             return pairs
 
+    parser = DoubanCollectionHTMLParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:
+        parser = None
+
+    if parser and parser.pairs:
+        return parser.pairs
+
     item_matches = re.findall(
         r'<div[^>]*class="[^"]*\bitem\b[^"]*"[^>]*>(.*?)</div>\s*</div>',
         html,
@@ -316,12 +517,12 @@ def extract_title_and_director_pairs(html):
             if not title_match or not intro_match:
                 continue
 
-            title = strip_tags(title_match.group(1)).split("/")[0].strip()
-            director = parse_director_from_text(
-                strip_tags(intro_match.group(1)), title=title
+            pair = finalize_extracted_item(
+                title=title_match.group(1),
+                intro=strip_tags(intro_match.group(1)),
             )
-            if title and director:
-                pairs.append((title, director))
+            if pair:
+                pairs.append(pair)
     else:
         title_matches = re.findall(
             r'<(?:span|li)[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>(.*?)</(?:span|li)>',
@@ -335,10 +536,9 @@ def extract_title_and_director_pairs(html):
         )
 
         for raw_title, raw_intro in zip(title_matches, intro_matches):
-            title = strip_tags(raw_title).split("/")[0].strip()
-            director = parse_director_from_text(strip_tags(raw_intro), title=title)
-            if title and director:
-                pairs.append((title, director))
+            pair = finalize_extracted_item(title=raw_title, intro=strip_tags(raw_intro))
+            if pair:
+                pairs.append(pair)
 
     return pairs
 
@@ -355,57 +555,32 @@ def parse_director_from_text(text, title=""):
         return match.group(1).strip()
 
     parts = [part.strip() for part in normalized.split("/") if part.strip()]
+    for part in parts:
+        if is_year_segment(part) or is_metadata_segment(part):
+            continue
+        if is_director_segment(part, title):
+            return part
+
     duration_index = find_duration_index(parts)
     if duration_index is not None:
         directors = collect_directors_before_duration(parts, duration_index, title)
         if directors:
             return " / ".join(directors)
 
-    if len(parts) >= 2:
-        return parts[-1]
     if parts:
-        return parts[0]
+        return next(
+            (part for part in parts if not is_year_segment(part) and not is_metadata_segment(part)),
+            parts[0],
+        )
     return ""
 
 
-def find_duration_index(parts):
-    duration_pattern = re.compile(
-        r"^\d+\s*(分钟|min|分钟\(.+\)|集|集\(.+\)|小时|季|集全)$",
-        flags=re.IGNORECASE,
-    )
-    for index, part in enumerate(parts):
-        if duration_pattern.search(part) or "分钟" in part:
-            return index
-    return None
+def is_year_segment(part):
+    return bool(re.fullmatch(r"\d{4}(?:[-.]\d{1,2}[-.]\d{1,2})?", part or ""))
 
 
-def collect_directors_before_duration(parts, duration_index, title=""):
-    directors = []
-
-    for index in range(duration_index - 1, -1, -1):
-        part = parts[index].strip()
-        if not part:
-            continue
-
-        if is_director_segment(part, title):
-            directors.insert(0, part)
-            continue
-
-        if directors:
-            break
-
-    return directors
-
-
-def is_director_segment(part, title=""):
-    if len(part) > 40:
-        return False
-
-    lowered = part.lower()
-    if lowered.startswith(("http://", "https://", "www.")):
-        return False
-
-    blocked_keywords = (
+def is_metadata_segment(part):
+    metadata_keywords = (
         "分钟",
         "集",
         "中国",
@@ -452,7 +627,47 @@ def is_director_segment(part, title=""):
         "汉语",
         "普通话",
     )
-    if any(keyword in part for keyword in blocked_keywords):
+    return any(keyword in (part or "") for keyword in metadata_keywords)
+
+
+def find_duration_index(parts):
+    duration_pattern = re.compile(
+        r"^\d+\s*(分钟|min|分钟\(.+\)|集|集\(.+\)|小时|季|集全)$",
+        flags=re.IGNORECASE,
+    )
+    for index, part in enumerate(parts):
+        if duration_pattern.search(part) or "分钟" in part:
+            return index
+    return None
+
+
+def collect_directors_before_duration(parts, duration_index, title=""):
+    directors = []
+
+    for index in range(duration_index - 1, -1, -1):
+        part = parts[index].strip()
+        if not part:
+            continue
+
+        if is_director_segment(part, title):
+            directors.insert(0, part)
+            continue
+
+        if directors:
+            break
+
+    return directors
+
+
+def is_director_segment(part, title=""):
+    if len(part) > 40:
+        return False
+
+    lowered = part.lower()
+    if lowered.startswith(("http://", "https://", "www.")):
+        return False
+
+    if is_metadata_segment(part):
         return False
 
     if re.search(r"\d{4}", part):
@@ -468,21 +683,462 @@ def is_director_segment(part, title=""):
     return bool(re.search(r"[\u4e00-\u9fffA-Za-z]", part))
 
 
-def fetch_html(url, headers):
+def looks_like_douban_login_page(html):
+    normalized = normalize_text(strip_tags(html))
+    login_markers = (
+        "登录豆瓣",
+        "扫码登录",
+        "密码登录",
+        "豆瓣账号登录",
+        "accounts.douban.com/passport/login",
+    )
+    return any(marker in normalized or marker in html for marker in login_markers)
+
+
+def looks_like_douban_block_page(html):
+    normalized = normalize_text(strip_tags(html))
+    block_markers = (
+        "检测到有异常请求",
+        "sec.douban.com",
+        "访问受限",
+        "安全验证",
+        "验证码",
+        "403 Forbidden",
+    )
+    return any(marker in normalized or marker in html for marker in block_markers)
+
+
+def apple_script_quote(value):
+    return (
+        (value or "")
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+    )
+
+
+def run_applescript(script, browser_label="浏览器"):
+    try:
+        completed = subprocess.run(
+            ["/usr/bin/osascript"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    except FileNotFoundError as error:
+        raise ValueError("当前系统不支持通过浏览器会话导入。") from error
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or error.stdout or "").strip()
+        if "Not authorized" in detail or "1743" in detail:
+            raise ValueError(
+                f"浏览器导入需要系统授权控制 {browser_label}。请在弹窗中允许，"
+                "或到“系统设置 -> 隐私与安全性 -> 自动化”里开启权限后重试。"
+            ) from error
+        raise ValueError(f"通过 {browser_label} 导入失败：{detail or '未知错误'}") from error
+
+    return completed.stdout.strip()
+
+
+def run_command(command, input_text=None):
+    completed = subprocess.run(
+        command,
+        input=input_text,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return completed.stdout
+
+
+def get_clipboard_text():
+    return run_command(["/usr/bin/pbpaste"])
+
+
+def set_clipboard_text(value):
+    run_command(["/usr/bin/pbcopy"], input_text=value)
+
+
+def get_frontmost_supported_browser():
+    script = '''
+tell application "System Events"
+    set frontApp to name of first application process whose frontmost is true
+end tell
+return frontApp
+'''.strip()
+    try:
+        app_name = run_applescript(script).strip()
+    except ValueError:
+        return ""
+
+    for browser_name, known_app_name in BROWSER_APP_NAMES.items():
+        if app_name == known_app_name:
+            return browser_name
+    return ""
+
+
+def open_chrome_window(url):
+    quoted_url = apple_script_quote(url)
+    script = f'''
+tell application "Google Chrome"
+    activate
+    set newWindow to make new window
+    set URL of active tab of newWindow to "{quoted_url}"
+    repeat 120 times
+        if loading of active tab of newWindow is false then exit repeat
+        delay 0.25
+    end repeat
+    delay 0.3
+    return id of newWindow
+end tell
+'''.strip()
+    return int(run_applescript(script, browser_label=BROWSER_LABELS["chrome"]))
+
+
+def read_chrome_window_snapshot(window_id, current_url):
+    original_clipboard = ""
+    clipboard_backed_up = False
+    source_url = current_url if current_url.startswith("view-source:") else f"view-source:{current_url}"
+    quoted_url = apple_script_quote(source_url)
+    script = f'''
+tell application "Google Chrome"
+    set targetWindow to first window whose id is {int(window_id)}
+    activate
+    set URL of active tab of targetWindow to "{quoted_url}"
+    repeat 120 times
+        if loading of active tab of targetWindow is false then exit repeat
+        delay 0.25
+    end repeat
+end tell
+tell application "System Events"
+    tell process "Google Chrome"
+        keystroke "a" using {{command down}}
+        delay 0.15
+        keystroke "c" using {{command down}}
+    end tell
+end tell
+'''.strip()
+    try:
+        original_clipboard = get_clipboard_text()
+        clipboard_backed_up = True
+    except Exception:
+        original_clipboard = ""
+
+    try:
+        run_applescript(script, browser_label=BROWSER_LABELS["chrome"])
+        time.sleep(0.2)
+        html = get_clipboard_text()
+    except ValueError as error:
+        message = str(error)
+        if "System Events" in message:
+            raise ValueError(
+                "通过 Google Chrome 导入失败：需要允许本应用控制系统键盘与辅助功能，"
+                "以便自动复制页面源码。请在“系统设置 -> 隐私与安全性 -> 辅助功能 / 自动化”中授权后重试。"
+            ) from error
+        raise
+    finally:
+        if clipboard_backed_up:
+            try:
+                set_clipboard_text(original_clipboard)
+            except Exception:
+                pass
+
+    if not html.strip():
+        raise ValueError("Chrome 没有复制到页面源码，请确认豆瓣页面已经完全加载。")
+
+    return json.dumps(
+        {
+            "url": current_url,
+            "nextHref": find_next_page_url(html, current_url) or "",
+            "html": html,
+        }
+    )
+
+
+def navigate_chrome_window(window_id, url):
+    quoted_url = apple_script_quote(url)
+    script = f'''
+tell application "Google Chrome"
+    set targetWindow to first window whose id is {int(window_id)}
+    set URL of active tab of targetWindow to "{quoted_url}"
+    repeat 120 times
+        if loading of active tab of targetWindow is false then exit repeat
+        delay 0.25
+    end repeat
+    delay 0.3
+    return URL of active tab of targetWindow
+end tell
+'''.strip()
+    return run_applescript(script, browser_label=BROWSER_LABELS["chrome"])
+
+
+def close_chrome_window(window_id):
+    script = f'''
+tell application "Google Chrome"
+    if (count of (every window whose id is {int(window_id)})) > 0 then
+        close (first window whose id is {int(window_id)})
+    end if
+end tell
+'''.strip()
+    try:
+        run_applescript(script, browser_label=BROWSER_LABELS["chrome"])
+    except ValueError:
+        pass
+
+
+def open_safari_window(url):
+    quoted_url = apple_script_quote(url)
+    script = f'''
+tell application "Safari"
+    activate
+    make new document with properties {{URL:"{quoted_url}"}}
+    set targetWindow to front window
+    repeat 120 times
+        try
+            if (do JavaScript "document.readyState" in current tab of targetWindow) is "complete" then exit repeat
+        end try
+        delay 0.25
+    end repeat
+    delay 0.3
+    return id of targetWindow
+end tell
+'''.strip()
+    return int(run_applescript(script, browser_label=BROWSER_LABELS["safari"]))
+
+
+def read_safari_window_snapshot(window_id):
+    quoted_js = apple_script_quote(DOUBAN_BROWSER_PAGE_SCRIPT)
+    script = f'''
+tell application "Safari"
+    set targetWindow to first window whose id is {int(window_id)}
+    repeat 120 times
+        try
+            if (do JavaScript "document.readyState" in current tab of targetWindow) is "complete" then exit repeat
+        end try
+        delay 0.25
+    end repeat
+    delay 0.2
+    return do JavaScript "{quoted_js}" in current tab of targetWindow
+end tell
+'''.strip()
+    raw_output = run_applescript(script, browser_label=BROWSER_LABELS["safari"])
+    if not raw_output:
+        raise ValueError("Safari 没有返回页面内容，请确认豆瓣标签页已经完全加载。")
+    return raw_output
+
+
+def navigate_safari_window(window_id, url):
+    quoted_url = apple_script_quote(url)
+    script = f'''
+tell application "Safari"
+    set targetWindow to first window whose id is {int(window_id)}
+    set URL of current tab of targetWindow to "{quoted_url}"
+    repeat 120 times
+        try
+            if (do JavaScript "document.readyState" in current tab of targetWindow) is "complete" then exit repeat
+        end try
+        delay 0.25
+    end repeat
+    delay 0.3
+    return URL of current tab of targetWindow
+end tell
+'''.strip()
+    return run_applescript(script, browser_label=BROWSER_LABELS["safari"])
+
+
+def close_safari_window(window_id):
+    script = f'''
+tell application "Safari"
+    if (count of (every window whose id is {int(window_id)})) > 0 then
+        close (first window whose id is {int(window_id)})
+    end if
+end tell
+'''.strip()
+    try:
+        run_applescript(script, browser_label=BROWSER_LABELS["safari"])
+    except ValueError:
+        pass
+
+
+def get_browser_candidates(preferred_browser):
+    if preferred_browser == "chrome":
+        return ["chrome"]
+    if preferred_browser == "safari":
+        return ["safari"]
+
+    frontmost_browser = get_frontmost_supported_browser()
+    ordered_browsers = []
+
+    if frontmost_browser:
+        ordered_browsers.append(frontmost_browser)
+
+    for browser_name in ("chrome", "safari"):
+        if browser_name not in ordered_browsers:
+            ordered_browsers.append(browser_name)
+
+    return ordered_browsers
+
+
+def open_browser_window(browser_name, url):
+    if browser_name == "chrome":
+        return open_chrome_window(url)
+    if browser_name == "safari":
+        return open_safari_window(url)
+    raise ValueError(f"不支持的浏览器：{browser_name}")
+
+
+def read_browser_window_snapshot(browser_name, window_id, current_url):
+    if browser_name == "chrome":
+        return read_chrome_window_snapshot(window_id, current_url)
+    if browser_name == "safari":
+        return read_safari_window_snapshot(window_id)
+    raise ValueError(f"不支持的浏览器：{browser_name}")
+
+
+def navigate_browser_window(browser_name, window_id, url):
+    if browser_name == "chrome":
+        return navigate_chrome_window(window_id, url)
+    if browser_name == "safari":
+        return navigate_safari_window(window_id, url)
+    raise ValueError(f"不支持的浏览器：{browser_name}")
+
+
+def close_browser_window(browser_name, window_id):
+    if browser_name == "chrome":
+        close_chrome_window(window_id)
+        return
+    if browser_name == "safari":
+        close_safari_window(window_id)
+        return
+    raise ValueError(f"不支持的浏览器：{browser_name}")
+
+
+def collect_pairs_via_browser(start_url, preferred_browser="auto"):
+    if sys.platform != "darwin":
+        raise ValueError("浏览器导入目前只支持 macOS。")
+
+    browser_errors = []
+
+    for browser_name in get_browser_candidates(preferred_browser):
+        window_id = None
+        visited_urls = set()
+        all_pairs = []
+        page_count = 0
+
+        try:
+            window_id = open_browser_window(browser_name, start_url)
+            current_url = start_url
+
+            while (
+                current_url
+                and current_url not in visited_urls
+                and len(all_pairs) < MAX_IMPORT_RECORDS
+            ):
+                visited_urls.add(current_url)
+                snapshot_json = read_browser_window_snapshot(
+                    browser_name,
+                    window_id,
+                    current_url,
+                )
+                try:
+                    snapshot = json.loads(snapshot_json)
+                except json.JSONDecodeError as error:
+                    raise ValueError(
+                        f"{BROWSER_LABELS[browser_name]} 返回的页面数据无法解析。"
+                    ) from error
+
+                html = snapshot.get("html", "")
+                current_url = (snapshot.get("url", current_url) or current_url).strip()
+                next_url = (snapshot.get("nextHref", "") or "").strip()
+
+                page_count += 1
+                validate_douban_collection_page(html, via_browser=True)
+
+                page_pairs = extract_title_and_director_pairs(html)
+                all_pairs.extend(page_pairs)
+
+                if len(page_pairs) == 0:
+                    break
+
+                if next_url and next_url not in visited_urls:
+                    if browser_name != "chrome":
+                        navigate_browser_window(browser_name, window_id, next_url)
+                    current_url = next_url
+                else:
+                    current_url = None
+
+            if all_pairs:
+                return all_pairs[:MAX_IMPORT_RECORDS], page_count, browser_name
+
+            browser_errors.append(
+                f"{BROWSER_LABELS[browser_name]} 已打开页面，但没有识别到电影数据。"
+            )
+        except ValueError as error:
+            browser_errors.append(str(error))
+        finally:
+            if window_id is not None:
+                close_browser_window(browser_name, window_id)
+
+    detail = "；".join(dict.fromkeys(browser_errors))
+    raise ValueError(
+        "浏览器导入失败。没有在可用浏览器里拿到有效的豆瓣“看过”列表。"
+        + (f" 详情：{detail}" if detail else "")
+    )
+
+
+def build_douban_opener():
+    return build_opener(HTTPCookieProcessor(CookieJar()))
+
+
+def fetch_html_once(url, headers, opener=None, context=None):
     request_object = Request(url, headers=headers)
     try:
-        with urlopen(request_object, timeout=15) as response:
+        if opener is not None:
+            with opener.open(request_object, timeout=15) as response:
+                return response.read().decode("utf-8", errors="ignore")
+        with urlopen(request_object, timeout=15, context=context) as response:
             return response.read().decode("utf-8", errors="ignore")
     except URLError as error:
         # Some local environments inject a custom certificate chain and break
         # Python's default HTTPS verification for otherwise valid pages.
         if isinstance(error.reason, ssl.SSLCertVerificationError):
             insecure_context = ssl._create_unverified_context()
-            with urlopen(
-                request_object, timeout=15, context=insecure_context
-            ) as response:
+            with urlopen(request_object, timeout=15, context=insecure_context) as response:
                 return response.read().decode("utf-8", errors="ignore")
         raise
+
+
+def warm_up_douban_session(opener, headers, target_url, force=False):
+    if getattr(opener, "_douban_warmed", False) and not force:
+        return
+
+    warmup_urls = list(DOUBAN_WARMUP_URLS)
+
+    parsed_target = urlparse(target_url)
+    if parsed_target.scheme and parsed_target.netloc:
+        warmup_urls.append(f"{parsed_target.scheme}://{parsed_target.netloc}/")
+
+    for warmup_url in warmup_urls:
+        try:
+            fetch_html_once(warmup_url, headers=headers, opener=opener)
+        except Exception:
+            continue
+
+    opener._douban_warmed = True
+
+
+def fetch_html(url, headers, opener=None):
+    active_opener = opener or build_douban_opener()
+    warm_up_douban_session(active_opener, headers, url)
+
+    try:
+        return fetch_html_once(url, headers=headers, opener=active_opener)
+    except HTTPError as error:
+        if error.code != 403:
+            raise
+
+        warm_up_douban_session(active_opener, headers, url, force=True)
+        return fetch_html_once(url, headers=headers, opener=active_opener)
 
 
 def find_next_page_url(html, current_url):
@@ -519,7 +1175,33 @@ def find_next_page_url(html, current_url):
     return None
 
 
-def collect_paginated_pairs(start_url, headers):
+def validate_douban_collection_page(html, cookie_provided=False, via_browser=False):
+    if looks_like_douban_block_page(html):
+        if via_browser:
+            raise ValueError(
+                "当前浏览器打开的是豆瓣安全验证页或风控页。请先在浏览器里完成验证，"
+                "确认页面能正常看到“我看过的影视”列表后再重试。"
+            )
+        raise ValueError(
+            "豆瓣暂时拦截了这次抓取请求。请稍后重试，或改为粘贴页面 HTML 导入。"
+        )
+
+    if looks_like_douban_login_page(html):
+        if via_browser:
+            raise ValueError(
+                "当前所选浏览器里没有可用的豆瓣登录态。请先在这个浏览器中登录豆瓣，"
+                "或者切换到另一个已登录的浏览器后重试。"
+            )
+        if cookie_provided:
+            raise ValueError(
+                "豆瓣返回了登录页，当前 Cookie 可能已失效。请更新浏览器 Cookie 后重试。"
+            )
+        raise ValueError(
+            "这个页面需要登录后才能访问。请补充浏览器 Cookie，或直接粘贴页面 HTML 导入。"
+        )
+
+
+def collect_paginated_pairs(start_url, headers, opener, cookie_provided=False):
     current_url = start_url
     visited_urls = set()
     all_pairs = []
@@ -531,8 +1213,9 @@ def collect_paginated_pairs(start_url, headers):
         and len(all_pairs) < MAX_IMPORT_RECORDS
     ):
         visited_urls.add(current_url)
-        html = fetch_html(current_url, headers)
+        html = fetch_html(current_url, headers, opener=opener)
         page_count += 1
+        validate_douban_collection_page(html, cookie_provided=cookie_provided)
 
         page_pairs = extract_title_and_director_pairs(html)
         all_pairs.extend(page_pairs)
@@ -545,38 +1228,35 @@ def collect_paginated_pairs(start_url, headers):
     return all_pairs[:MAX_IMPORT_RECORDS], page_count
 
 
-def import_from_douban(url="", html="", cookie="", user_id=None):
-    normalized_url = unescape((url or "").strip())
-    payload_html = html.strip()
-    page_count = 1
-
-    if not payload_html:
-        if not normalized_url:
-            raise ValueError("请提供豆瓣页面 URL 或页面 HTML。")
-
-        parsed = urlparse(normalized_url)
-        if "douban.com" not in parsed.netloc:
-            raise ValueError("目前只支持导入 douban.com 页面。")
-
-        headers = dict(DOUBAN_HEADERS)
-        if cookie.strip():
-            headers["Cookie"] = cookie.strip()
-
-        extracted_pairs, page_count = collect_paginated_pairs(normalized_url, headers)
-    else:
-        extracted_pairs = extract_title_and_director_pairs(payload_html)
-
+def normalize_import_pairs(extracted_pairs):
     if not extracted_pairs:
-        raise ValueError("没有从页面中识别出电影数据，请确认页面内容是否为豆瓣“看过”列表。")
+        raise ValueError(
+            "没有从页面中识别出电影数据。请确认页面内容确实是豆瓣“看过”列表，"
+            "而不是登录页、验证码页或其他页面。"
+        )
 
     normalized_pairs = []
     seen_pairs = set()
 
     for title, director in extracted_pairs:
-        pair_key = (title.strip(), director.strip())
+        pair_key = ((title or "").strip(), (director or "").strip())
         if pair_key[0] and pair_key[1] and pair_key not in seen_pairs:
             normalized_pairs.append(pair_key)
             seen_pairs.add(pair_key)
+
+    if not normalized_pairs:
+        raise ValueError("没有可导入的有效电影数据。")
+
+    return normalized_pairs
+
+
+def persist_import_pairs(
+    extracted_pairs,
+    user_id,
+    page_count_hint=1,
+    browser_used="",
+):
+    normalized_pairs = normalize_import_pairs(extracted_pairs)
 
     connection = get_connection()
     inserted_count = 0
@@ -612,9 +1292,79 @@ def import_from_douban(url="", html="", cookie="", user_id=None):
     return {
         "imported_count": inserted_count,
         "parsed_count": len(normalized_pairs),
-        "page_count": page_count,
+        "page_count": page_count_hint or 1,
         "capped": len(normalized_pairs) >= MAX_IMPORT_RECORDS,
+        "browser_used": browser_used,
     }
+
+
+def import_from_douban(
+    url="",
+    html="",
+    cookie="",
+    user_id=None,
+    prefer_browser=False,
+    browser="auto",
+    page_count_hint=None,
+):
+    normalized_url = unescape((url or "").strip())
+    payload_html = html.strip()
+    page_count = 1
+    cookie_value = cookie.strip()
+    browser_used = ""
+
+    if not payload_html:
+        if not normalized_url:
+            raise ValueError("请提供豆瓣页面 URL 或页面 HTML。")
+
+        parsed = urlparse(normalized_url)
+        if "douban.com" not in parsed.netloc:
+            raise ValueError("目前只支持导入 douban.com 页面。")
+
+        if prefer_browser:
+            extracted_pairs, page_count, browser_used = collect_pairs_via_browser(
+                normalized_url,
+                preferred_browser=browser,
+            )
+        else:
+            headers = dict(DOUBAN_HEADERS)
+            if cookie_value:
+                headers["Cookie"] = cookie_value
+
+            opener = build_douban_opener()
+            try:
+                extracted_pairs, page_count = collect_paginated_pairs(
+                    normalized_url,
+                    headers,
+                    opener=opener,
+                    cookie_provided=bool(cookie_value),
+                )
+            except HTTPError as error:
+                if error.code == 403:
+                    raise ValueError(
+                        "豆瓣拒绝了这次抓取请求（403）。请优先使用页面里的“无权限一键导入”书签，"
+                        "或更新 Cookie，或者直接粘贴页面 HTML 导入。"
+                    ) from error
+                raise
+    else:
+        validate_douban_collection_page(payload_html, cookie_provided=bool(cookie_value))
+        extracted_pairs = extract_title_and_director_pairs(payload_html)
+
+    return persist_import_pairs(
+        extracted_pairs,
+        user_id=user_id,
+        page_count_hint=page_count_hint or page_count,
+        browser_used=browser_used,
+    )
+
+
+def build_import_message(result):
+    return (
+        f"{f'已通过 {BROWSER_LABELS.get(result['browser_used'], result['browser_used'])} 导入。' if result['browser_used'] else ''}"
+        f"共抓取 {result['page_count']} 页，解析到 {result['parsed_count']} 条电影，"
+        f"成功导入 {result['imported_count']} 条新记录。"
+        f"{' 已达到 1000 条导入上限。' if result['capped'] else ''}"
+    )
 
 
 @app.route("/")
@@ -625,6 +1375,9 @@ def home():
         "index.html",
         movies=list_movies(current_user["id"]),
         current_user=current_user,
+        bookmarklet_token=create_bookmarklet_token(current_user["id"]),
+        initial_message=request.args.get("import_message", ""),
+        initial_message_type=request.args.get("import_type", "info"),
     )
 
 
@@ -733,6 +1486,8 @@ def import_movies(current_user):
             url=payload.get("url", ""),
             html=payload.get("html", ""),
             cookie=payload.get("cookie", ""),
+            prefer_browser=bool(payload.get("preferBrowser")),
+            browser=(payload.get("browser") or "auto").strip().lower(),
             user_id=current_user["id"],
         )
     except (HTTPError, URLError) as error:
@@ -743,13 +1498,60 @@ def import_movies(current_user):
     return jsonify(
         {
             "movies": list_movies(current_user["id"]),
-            "message": (
-                f"共抓取 {result['page_count']} 页，解析到 {result['parsed_count']} 条电影，"
-                f"成功导入 {result['imported_count']} 条新记录。"
-                f"{' 已达到 1000 条导入上限。' if result['capped'] else ''}"
-            ),
+            "message": build_import_message(result),
         }
     )
+
+
+@app.post("/import/bookmarklet")
+def import_movies_from_bookmarklet():
+    token = (request.form.get("token") or "").strip()
+    pairs_json = request.form.get("pairs_json", "")
+    payload_html = request.form.get("html", "")
+    page_count_raw = (request.form.get("page_count") or "").strip()
+    source_url = (request.form.get("url") or "").strip()
+
+    try:
+        user_id = parse_bookmarklet_token(token)
+        page_count_hint = int(page_count_raw) if page_count_raw.isdigit() else None
+        if pairs_json.strip():
+            parsed_pairs = json.loads(pairs_json)
+            extracted_pairs = []
+
+            for item in parsed_pairs:
+                if not isinstance(item, dict):
+                    continue
+                extracted_pairs.append(
+                    ((item.get("title") or "").strip(), (item.get("director") or "").strip())
+                )
+
+            result = persist_import_pairs(
+                extracted_pairs,
+                user_id=user_id,
+                page_count_hint=page_count_hint,
+            )
+        else:
+            result = import_from_douban(
+                url=source_url,
+                html=payload_html,
+                user_id=user_id,
+                page_count_hint=page_count_hint,
+            )
+        return redirect(
+            url_for(
+                "home",
+                import_message=build_import_message(result),
+                import_type="success",
+            )
+        )
+    except (ValueError, json.JSONDecodeError) as error:
+        return redirect(
+            url_for(
+                "home",
+                import_message=str(error),
+                import_type="error",
+            )
+        )
 
 
 init_db()

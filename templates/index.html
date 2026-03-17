@@ -120,6 +120,13 @@
             box-shadow: var(--shadow);
         }
 
+        .button-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+        }
+
         .button-danger {
             color: #fff;
             background: linear-gradient(135deg, #b5412d, #d06b4b);
@@ -300,6 +307,7 @@
         }
 
         .field input,
+        .field select,
         .field textarea {
             width: 100%;
             border: 1px solid var(--line);
@@ -309,9 +317,28 @@
             background: rgba(255, 253, 248, 0.95);
         }
 
+        .field select {
+            appearance: none;
+        }
+
         .field textarea {
             min-height: 132px;
             resize: vertical;
+        }
+
+        .checkbox-label {
+            display: flex !important;
+            align-items: center;
+            gap: 10px;
+            margin-top: 32px;
+            margin-bottom: 0 !important;
+            font-weight: 600;
+        }
+
+        .checkbox-label input {
+            width: 18px;
+            height: 18px;
+            margin: 0;
         }
 
         .hint {
@@ -326,6 +353,20 @@
             gap: 12px;
             justify-content: flex-end;
             margin-top: 16px;
+        }
+
+        .bookmarklet-card {
+            padding: 16px 18px;
+            border: 1px dashed rgba(164, 72, 49, 0.28);
+            border-radius: 18px;
+            background: rgba(255, 250, 244, 0.9);
+        }
+
+        .bookmarklet-row {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin: 10px 0 8px;
         }
 
         @media (max-width: 860px) {
@@ -380,6 +421,29 @@
                         <label for="douban-url">豆瓣页面 URL</label>
                         <input id="douban-url" type="text" placeholder="https://movie.douban.com/mine?status=collect">
                     </div>
+                    <div class="field bookmarklet-card">
+                        <label>推荐：无权限一键导入</label>
+                        <p class="hint">把下面这个按钮拖到浏览器书签栏。之后打开豆瓣“我看过的影视”页面，点一下这个书签，就会用你当前浏览器的真实登录态自动翻页并导入，无需 macOS 隐私授权弹窗。</p>
+                        <div class="bookmarklet-row">
+                            <a id="bookmarklet-link" class="button-secondary button-link" href="#">拖到书签栏</a>
+                            <button id="copy-bookmarklet" class="button-secondary" type="button">复制书签代码</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="douban-browser">备用：调用本机浏览器会话</label>
+                        <select id="douban-browser">
+                            <option value="auto">自动检测（推荐）</option>
+                            <option value="chrome">Google Chrome</option>
+                            <option value="safari">Safari</option>
+                        </select>
+                        <p class="hint">只有在你不方便使用上面的书签导入时，再用这个备用方式。它可能触发 macOS 的自动化、辅助功能或隐私授权弹窗。</p>
+                    </div>
+                    <div class="field">
+                        <label class="checkbox-label" for="douban-prefer-browser">
+                            <input id="douban-prefer-browser" type="checkbox">
+                            <span>启用备用浏览器会话导入</span>
+                        </label>
+                    </div>
                     <div class="field">
                         <label for="douban-cookie">Cookie（可选）</label>
                         <textarea id="douban-cookie" placeholder="如果页面需要登录，可在这里粘贴浏览器 Cookie。"></textarea>
@@ -390,11 +454,11 @@
                     </div>
                 </div>
                 <ol class="import-steps">
-                    <li>推荐直接粘贴豆瓣“我看过的影视”页面 URL，比如 `https://movie.douban.com/mine?status=collect`。</li>
-                    <li>系统会自动沿着“后页”继续抓取，不需要你手动复制每一页源代码。</li>
-                    <li>如果 URL 因登录限制抓不到，再补充 Cookie；只有 URL 方式才会自动翻页。</li>
+                    <li>最顺手的方式是使用上面的“一键导入书签”。它会在豆瓣页面里直接抓取，并自动沿着“后页”继续读取。</li>
+                    <li>如果你不想用书签，也可以直接粘贴豆瓣“我看过的影视”页面 URL，比如 `https://movie.douban.com/mine?status=collect`。</li>
+                    <li>只有在书签方案不方便时，再启用备用浏览器会话导入或手动粘贴 Cookie / HTML。</li>
                 </ol>
-                <p class="hint">最多导入 1000 条记录，并按 `title + director` 去重。若 URL 无法访问，可以直接粘贴页面 HTML，但只会解析你粘贴进去的那一页内容。</p>
+                <p class="hint">最多导入 1000 条记录，并按 `title + director` 去重。书签导入不会请求系统级隐私权限；若 URL 无法访问，也可以直接粘贴页面 HTML，但只会解析你粘贴进去的那一页内容。</p>
                 <div class="import-actions">
                     <button id="close-import" class="button-secondary" type="button">关闭</button>
                     <button id="submit-import" class="button-primary" type="button">开始导入</button>
@@ -421,6 +485,9 @@
 
     <script>
         const initialMovies = {{ movies|tojson }};
+        const bookmarkletToken = {{ bookmarklet_token|tojson }};
+        const initialMessage = {{ initial_message|tojson }};
+        const initialMessageType = {{ initial_message_type|tojson }};
 
         const state = {
             isEditing: false,
@@ -448,7 +515,11 @@
             toggleImportButton: document.getElementById("toggle-import"),
             closeImportButton: document.getElementById("close-import"),
             submitImportButton: document.getElementById("submit-import"),
+            bookmarkletLink: document.getElementById("bookmarklet-link"),
+            copyBookmarkletButton: document.getElementById("copy-bookmarklet"),
             doubanUrl: document.getElementById("douban-url"),
+            doubanBrowser: document.getElementById("douban-browser"),
+            doubanPreferBrowser: document.getElementById("douban-prefer-browser"),
             doubanCookie: document.getElementById("douban-cookie"),
             doubanHtml: document.getElementById("douban-html"),
         };
@@ -462,6 +533,29 @@
         function clearMessage() {
             elements.statusBar.classList.remove("show");
             elements.statusMessage.textContent = "";
+        }
+
+        function buildBookmarkletCode() {
+            return `javascript:(()=>{const APP_ORIGIN=${JSON.stringify(window.location.origin)};const TOKEN=${JSON.stringify(bookmarkletToken)};const START_URL=location.href;if(!location.hostname.includes('douban.com')){alert('请在豆瓣页面使用这个书签。');return;}const text=(value)=>String(value||'').replace(/\\s+/g,' ').trim();const cleanTitle=(value)=>text(String(value||'').replace(/<[^>]+>/g,'')).split('/')[0].trim();const metadataWords=['分钟','集','中国','美国','英国','日本','韩国','法国','德国','意大利','西班牙','中国大陆','中国香港','中国台湾','纪录片','剧情','喜剧','动作','动画','爱情','惊悚','恐怖','战争','冒险','奇幻','科幻','犯罪','悬疑','音乐','歌舞','家庭','传记','历史','武侠','古装','脱口秀','真人秀','短片','韩语','英语','日语','法语','粤语','汉语','普通话'];const isMetadata=(part)=>metadataWords.some((word)=>String(part||'').includes(word));const isDirector=(part,title)=>{const value=text(part);if(!value||value.length>40)return false;if(/^https?:\\/\\//i.test(value)||/^www\\./i.test(value))return false;if(isMetadata(value))return false;if(/\\d{4}/.test(value))return false;if(/[()（）]/.test(value))return false;if(title&&value===title)return false;return /[\\u4e00-\\u9fffa-z]/i.test(value);};const parseDirector=(raw,title='')=>{const normalized=text(raw).replace(/https?:\\/\\/\\S+|www\\.\\S+/gi,'');const labeled=normalized.match(/导演[:：]?\\s*([^/]+)/);if(labeled)return text(labeled[1]);const parts=normalized.split('/').map((part)=>text(part)).filter(Boolean);for(const part of parts){if(/^\\d{4}(?:[-.]\\d{1,2}[-.]\\d{1,2})?$/.test(part))continue;if(isMetadata(part))continue;if(isDirector(part,title))return part;}return parts.find((part)=>!/^\\d{4}(?:[-.]\\d{1,2}[-.]\\d{1,2})?$/.test(part)&&!isMetadata(part))||parts[0]||'';};const extractPairs=(doc)=>Array.from(doc.querySelectorAll('.item')).map((item)=>{const titleNode=item.querySelector('.title');const introNode=item.querySelector('.intro');const subjectLink=item.querySelector('a[href*=\"/subject/\"]');const title=cleanTitle(titleNode?titleNode.textContent:(subjectLink?subjectLink.textContent:''));const director=parseDirector(introNode?introNode.textContent:'',title);return title&&director?{title,director}:null;}).filter(Boolean);const findNext=(doc,currentUrl)=>{const next=doc.querySelector('.paginator .next a[href],link[rel=\"next\"][href]');if(next){return new URL(next.getAttribute('href')||next.href,currentUrl).href;}const textLink=Array.from(doc.querySelectorAll('a[href]')).find((node)=>{const label=(node.textContent||'').trim();return label==='后页'||label==='后页>';});return textLink?new URL(textLink.getAttribute('href')||textLink.href,currentUrl).href:'';};(async()=>{try{let currentUrl=location.href;const visited=new Set();const pairs=[];let pageCount=0;while(currentUrl&&!visited.has(currentUrl)&&pageCount<80){visited.add(currentUrl);let doc;if(currentUrl===location.href){doc=document;}else{const response=await fetch(currentUrl,{credentials:'include'});if(!response.ok){throw new Error('第 '+(pageCount+1)+' 页返回 '+response.status);}doc=new DOMParser().parseFromString(await response.text(),'text/html');}pairs.push(...extractPairs(doc));pageCount+=1;currentUrl=findNext(doc,currentUrl);}const form=document.createElement('form');form.method='POST';form.action=APP_ORIGIN+'/import/bookmarklet';form.target='_blank';form.style.display='none';const fields={token:TOKEN,url:START_URL,page_count:String(pageCount),pairs_json:JSON.stringify(pairs)};Object.entries(fields).forEach(([name,value])=>{const field=document.createElement('textarea');field.name=name;field.value=value;field.style.display='none';form.appendChild(field);});document.body.appendChild(form);form.submit();setTimeout(()=>form.remove(),1000);}catch(error){alert('导入失败：'+(error&&error.message?error.message:error));}})();})();`;
+        }
+
+        function refreshBookmarklet() {
+            const code = buildBookmarkletCode();
+            elements.bookmarkletLink.href = code;
+        }
+
+        async function copyBookmarkletCode() {
+            try {
+                await navigator.clipboard.writeText(buildBookmarkletCode());
+                showMessage("已复制书签代码。你可以新建一个浏览器书签，把地址替换成这段代码。");
+            } catch (error) {
+                showMessage("复制书签代码失败，请检查浏览器剪贴板权限。", "error");
+            }
+        }
+
+        function syncBrowserImportControls() {
+            const enabled = elements.doubanPreferBrowser.checked;
+            elements.doubanBrowser.disabled = !enabled;
         }
 
         function sortedMovies(movies) {
@@ -755,6 +849,8 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         url: elements.doubanUrl.value.trim(),
+                        browser: elements.doubanBrowser.value,
+                        preferBrowser: elements.doubanPreferBrowser.checked,
                         cookie: elements.doubanCookie.value.trim(),
                         html: elements.doubanHtml.value,
                     }),
@@ -792,6 +888,7 @@
         elements.deleteAllButton.addEventListener("click", markAllRowsDeleted);
         elements.cancelButton.addEventListener("click", cancelEdit);
         elements.saveButton.addEventListener("click", saveDraft);
+        elements.copyBookmarkletButton.addEventListener("click", copyBookmarkletCode);
         elements.toggleImportButton.addEventListener("click", () => {
             if (state.isEditing) {
                 showMessage("编辑模式下暂不支持导入，请先保存或取消当前修改。", "error");
@@ -805,6 +902,7 @@
             elements.importPanel.classList.remove("show");
         });
         elements.submitImportButton.addEventListener("click", submitImport);
+        elements.doubanPreferBrowser.addEventListener("change", syncBrowserImportControls);
 
         elements.tableBody.addEventListener("input", (event) => {
             const field = event.target.dataset.field;
@@ -828,7 +926,12 @@
         });
 
         state.movies = sortedMovies(state.movies);
+        refreshBookmarklet();
+        syncBrowserImportControls();
         render();
+        if (initialMessage) {
+            showMessage(initialMessage, initialMessageType || "info");
+        }
     </script>
 </body>
 </html>
