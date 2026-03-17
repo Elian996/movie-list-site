@@ -65,6 +65,13 @@
             align-items: center;
         }
 
+        .action-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: stretch;
+        }
+
         .user-panel {
             display: flex;
             align-items: center;
@@ -369,6 +376,243 @@
             margin: 10px 0 8px;
         }
 
+        .ai-trigger {
+            min-width: 172px;
+            border: 1px solid rgba(127, 48, 30, 0.12);
+            border-radius: 20px;
+            padding: 12px 14px;
+            background:
+                linear-gradient(135deg, rgba(164, 72, 49, 0.12), rgba(255, 253, 248, 0.95)),
+                rgba(255, 253, 248, 0.92);
+            box-shadow: var(--shadow);
+            text-align: left;
+        }
+
+        .ai-trigger strong,
+        .ai-trigger span {
+            display: block;
+        }
+
+        .ai-trigger span {
+            margin-bottom: 3px;
+            color: var(--accent-dark);
+            font-size: 11px;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+        }
+
+        .ai-trigger strong {
+            color: var(--ink);
+            font-size: 14px;
+        }
+
+        .ai-chat-panel {
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            z-index: 40;
+            display: none;
+            width: min(420px, calc(100vw - 24px));
+        }
+
+        .ai-chat-panel.show {
+            display: block;
+        }
+
+        .ai-chat-panel.dragging {
+            user-select: none;
+        }
+
+        .ai-chat-card {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 1px solid rgba(216, 201, 184, 0.95);
+            border-radius: 28px;
+            background: rgba(255, 252, 247, 0.96);
+            box-shadow: 0 22px 52px rgba(62, 37, 24, 0.22);
+            backdrop-filter: blur(18px);
+            width: 100%;
+            max-height: min(680px, calc(100vh - 32px));
+            cursor: grab;
+        }
+
+        .ai-chat-panel.dragging .ai-chat-card {
+            cursor: grabbing;
+        }
+
+        .ai-chat-header {
+            flex-shrink: 0;
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: flex-start;
+            padding: 18px 18px 12px;
+            border-bottom: 1px solid rgba(216, 201, 184, 0.72);
+        }
+
+        .ai-chat-header p {
+            margin: 0 0 4px;
+            color: var(--accent-dark);
+            font-size: 11px;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+        }
+
+        .ai-chat-header h2 {
+            margin: 0;
+            font-size: 18px;
+        }
+
+        .ai-close-button {
+            width: 38px;
+            height: 38px;
+            padding: 0;
+            border-radius: 999px;
+            background: rgba(164, 72, 49, 0.08);
+            color: var(--accent-dark);
+            box-shadow: none;
+            font-size: 24px;
+            line-height: 38px;
+        }
+
+        .ai-chat-note {
+            flex-shrink: 0;
+            padding: 14px 18px 0;
+        }
+
+        .ai-chat-note p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .ai-status-chip {
+            display: inline-flex;
+            margin-top: 10px;
+            padding: 7px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .ai-status-chip.online {
+            background: rgba(49, 133, 93, 0.12);
+            color: #1d6d49;
+        }
+
+        .ai-status-chip.offline {
+            background: rgba(180, 35, 24, 0.1);
+            color: #9a2b1f;
+        }
+
+        .ai-suggestions {
+            flex-shrink: 0;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 14px 18px 0;
+        }
+
+        .ai-suggestion {
+            border: 1px solid rgba(164, 72, 49, 0.18);
+            border-radius: 999px;
+            padding: 8px 12px;
+            background: rgba(255, 250, 244, 0.9);
+            box-shadow: none;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .ai-chat-messages {
+            display: flex;
+            flex: 1;
+            flex-direction: column;
+            gap: 12px;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 18px;
+        }
+
+        .ai-message {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-width: 92%;
+        }
+
+        .ai-message.user {
+            align-self: flex-end;
+        }
+
+        .ai-message.assistant {
+            align-self: flex-start;
+        }
+
+        .ai-message-label {
+            color: var(--muted);
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .ai-message-bubble {
+            border-radius: 18px;
+            padding: 12px 14px;
+            line-height: 1.65;
+            word-break: break-word;
+            white-space: pre-wrap;
+        }
+
+        .ai-message.user .ai-message-bubble {
+            background: linear-gradient(135deg, var(--accent), #c9694f);
+            color: #fff;
+        }
+
+        .ai-message.assistant .ai-message-bubble {
+            background: rgba(247, 239, 229, 0.96);
+            color: var(--ink);
+        }
+
+        .ai-message.assistant.loading .ai-message-bubble {
+            color: var(--muted);
+            font-style: italic;
+        }
+
+        .ai-chat-form {
+            flex-shrink: 0;
+            border-top: 1px solid rgba(216, 201, 184, 0.72);
+            padding: 14px 18px 18px;
+            background: rgba(255, 251, 246, 0.92);
+        }
+
+        .ai-chat-form textarea {
+            width: 100%;
+            min-height: 86px;
+            max-height: 160px;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            padding: 12px 14px;
+            font: inherit;
+            resize: vertical;
+            background: rgba(255, 253, 248, 0.98);
+        }
+
+        .ai-chat-form textarea:focus {
+            outline: none;
+            border-color: rgba(164, 72, 49, 0.42);
+            box-shadow: 0 0 0 4px rgba(164, 72, 49, 0.08);
+        }
+
+        .ai-chat-actions {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+            margin-top: 10px;
+        }
+
         @media (max-width: 860px) {
             .hero {
                 flex-direction: column;
@@ -379,6 +623,10 @@
                 justify-content: flex-start;
             }
 
+            .action-stack {
+                width: 100%;
+            }
+
             .table-wrap {
                 height: auto;
                 max-height: 70vh;
@@ -386,6 +634,22 @@
 
             th, td {
                 padding: 14px 10px;
+            }
+
+            .ai-chat-panel {
+                right: 12px;
+                left: 12px;
+                bottom: 12px;
+                width: auto;
+            }
+
+            .ai-chat-card {
+                max-height: calc(100vh - 24px);
+            }
+
+            .ai-chat-actions {
+                flex-direction: column;
+                align-items: stretch;
             }
         }
     </style>
@@ -406,7 +670,13 @@
                 </div>
                 <button id="copy-button" class="button-secondary" type="button">复制清单</button>
                 <button id="toggle-import" class="button-secondary" type="button">Import from</button>
-                <button id="edit-button" class="button-primary" type="button">Edit</button>
+                <div class="action-stack">
+                    <button id="edit-button" class="button-primary" type="button">Edit</button>
+                    <button id="toggle-ai" class="ai-trigger" type="button">
+                        <span>DeepSeek</span>
+                        <strong>AI 分析 / 推荐</strong>
+                    </button>
+                </div>
             </div>
         </section>
 
@@ -483,8 +753,38 @@
         </section>
     </div>
 
+    <div id="ai-chat-panel" class="ai-chat-panel" aria-hidden="true">
+        <div class="ai-chat-card">
+            <div class="ai-chat-header">
+                <div>
+                    <p>DeepSeek</p>
+                    <h2>电影分析助手</h2>
+                </div>
+                <button id="close-ai" class="ai-close-button" type="button" aria-label="关闭 AI 对话框">×</button>
+            </div>
+            <div class="ai-chat-note">
+                <p>对话只在当前窗口临时保留，关闭后会清空；AI 会参考你已保存的片单，不会读取未保存的编辑内容。</p>
+                <span id="ai-status-chip" class="ai-status-chip"></span>
+            </div>
+            <div class="ai-suggestions">
+                <button class="ai-suggestion" type="button" data-ai-prompt="帮我分析一下这份片单的口味和导演偏好。">分析片单口味</button>
+                <button class="ai-suggestion" type="button" data-ai-prompt="基于我现在的片单，推荐 5 部我大概率会喜欢、但还没看过的电影。">推荐 5 部电影</button>
+                <button class="ai-suggestion" type="button" data-ai-prompt="如果我接下来想补电影史，优先从哪些导演或地区开始？">补片方向建议</button>
+            </div>
+            <div id="ai-chat-messages" class="ai-chat-messages"></div>
+            <form id="ai-chat-form" class="ai-chat-form">
+                <textarea id="ai-input" placeholder="比如：我偏爱的类型是什么？接下来该看谁的片子？"></textarea>
+                <div class="ai-chat-actions">
+                    <p class="hint">按 Enter 发送，Shift + Enter 换行。</p>
+                    <button id="ai-send-button" class="button-primary" type="submit">发送</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
         const initialMovies = {{ movies|tojson }};
+        const aiAvailable = {{ ai_available|tojson }};
         const bookmarkletToken = {{ bookmarklet_token|tojson }};
         const initialMessage = {{ initial_message|tojson }};
         const initialMessageType = {{ initial_message_type|tojson }};
@@ -493,14 +793,34 @@
             isEditing: false,
             isSaving: false,
             isImporting: false,
+            isAiSending: false,
             importPanelVisible: false,
+            aiPanelVisible: false,
             movies: structuredClone(initialMovies),
             draftMovies: [],
             originalMovies: [],
+            aiMessages: [],
+            aiConversation: [],
+            aiSessionId: 0,
+            aiPanelPosition: null,
+            aiDrag: {
+                active: false,
+                offsetX: 0,
+                offsetY: 0,
+            },
         };
 
         const elements = {
             editButton: document.getElementById("edit-button"),
+            toggleAiButton: document.getElementById("toggle-ai"),
+            closeAiButton: document.getElementById("close-ai"),
+            aiChatPanel: document.getElementById("ai-chat-panel"),
+            aiChatCard: document.querySelector(".ai-chat-card"),
+            aiStatusChip: document.getElementById("ai-status-chip"),
+            aiChatMessages: document.getElementById("ai-chat-messages"),
+            aiChatForm: document.getElementById("ai-chat-form"),
+            aiInput: document.getElementById("ai-input"),
+            aiSendButton: document.getElementById("ai-send-button"),
             copyButton: document.getElementById("copy-button"),
             saveButton: document.getElementById("save-button"),
             cancelButton: document.getElementById("cancel-button"),
@@ -522,6 +842,7 @@
             doubanPreferBrowser: document.getElementById("douban-prefer-browser"),
             doubanCookie: document.getElementById("douban-cookie"),
             doubanHtml: document.getElementById("douban-html"),
+            aiSuggestionButtons: Array.from(document.querySelectorAll("[data-ai-prompt]")),
         };
 
         function showMessage(message, type = "info") {
@@ -556,6 +877,228 @@
         function syncBrowserImportControls() {
             const enabled = elements.doubanPreferBrowser.checked;
             elements.doubanBrowser.disabled = !enabled;
+        }
+
+        function clamp(value, min, max) {
+            return Math.min(Math.max(value, min), max);
+        }
+
+        function getAiPanelMargin() {
+            return window.innerWidth <= 860 ? 12 : 24;
+        }
+
+        function getAiPanelDimensions() {
+            const margin = getAiPanelMargin();
+            const width = elements.aiChatPanel.offsetWidth || Math.min(420, window.innerWidth - (margin * 2));
+            const height = elements.aiChatPanel.offsetHeight || Math.min(680, window.innerHeight - (margin * 2));
+            return { width, height, margin };
+        }
+
+        function clampAiPanelPosition(left, top) {
+            const { width, height, margin } = getAiPanelDimensions();
+            const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+            const maxTop = Math.max(margin, window.innerHeight - height - margin);
+
+            return {
+                left: clamp(left, margin, maxLeft),
+                top: clamp(top, margin, maxTop),
+            };
+        }
+
+        function applyAiPanelPosition() {
+            if (!state.aiPanelVisible) {
+                return;
+            }
+
+            const { width, height, margin } = getAiPanelDimensions();
+            const fallbackPosition = {
+                left: window.innerWidth - width - margin,
+                top: window.innerHeight - height - margin,
+            };
+            const nextPosition = state.aiPanelPosition
+                ? clampAiPanelPosition(state.aiPanelPosition.left, state.aiPanelPosition.top)
+                : clampAiPanelPosition(fallbackPosition.left, fallbackPosition.top);
+
+            state.aiPanelPosition = nextPosition;
+            elements.aiChatPanel.style.left = `${nextPosition.left}px`;
+            elements.aiChatPanel.style.top = `${nextPosition.top}px`;
+            elements.aiChatPanel.style.right = "auto";
+            elements.aiChatPanel.style.bottom = "auto";
+        }
+
+        function isAiDragTarget(target) {
+            return !target.closest("button, textarea, input, select, a, label");
+        }
+
+        function stopAiDrag() {
+            if (!state.aiDrag.active) {
+                return;
+            }
+
+            state.aiDrag.active = false;
+            elements.aiChatPanel.classList.remove("dragging");
+            document.removeEventListener("pointermove", handleAiDragMove);
+            document.removeEventListener("pointerup", stopAiDrag);
+            document.removeEventListener("pointercancel", stopAiDrag);
+        }
+
+        function handleAiDragMove(event) {
+            if (!state.aiDrag.active) {
+                return;
+            }
+
+            state.aiPanelPosition = clampAiPanelPosition(
+                event.clientX - state.aiDrag.offsetX,
+                event.clientY - state.aiDrag.offsetY,
+            );
+            applyAiPanelPosition();
+        }
+
+        function startAiDrag(event) {
+            if (!state.aiPanelVisible || event.button !== 0 || !isAiDragTarget(event.target)) {
+                return;
+            }
+
+            const panelRect = elements.aiChatPanel.getBoundingClientRect();
+            state.aiPanelPosition = {
+                left: panelRect.left,
+                top: panelRect.top,
+            };
+            state.aiDrag = {
+                active: true,
+                offsetX: event.clientX - panelRect.left,
+                offsetY: event.clientY - panelRect.top,
+            };
+
+            elements.aiChatPanel.classList.add("dragging");
+            document.addEventListener("pointermove", handleAiDragMove);
+            document.addEventListener("pointerup", stopAiDrag);
+            document.addEventListener("pointercancel", stopAiDrag);
+        }
+
+        function createAiWelcomeMessage() {
+            if (aiAvailable) {
+                return {
+                    role: "assistant",
+                    content: `我会参考你当前已保存的 ${state.movies.length} 部电影，帮你分析口味、总结偏好，并尽量推荐还没在片单里的电影。`,
+                };
+            }
+
+            return {
+                role: "assistant",
+                content: "AI 模块已经放好，但服务器还没有配置 DeepSeek API Key。你把 key 给我并写进环境变量后，这里就可以直接聊了。",
+            };
+        }
+
+        function syncAiAvailability() {
+            elements.aiStatusChip.textContent = aiAvailable ? "DeepSeek 已就绪" : "等待配置 API Key";
+            elements.aiStatusChip.className = `ai-status-chip ${aiAvailable ? "online" : "offline"}`;
+
+            const disabled = !aiAvailable || state.isAiSending;
+            elements.aiInput.disabled = disabled;
+            elements.aiSendButton.disabled = disabled;
+            elements.aiSuggestionButtons.forEach((button) => {
+                button.disabled = disabled;
+            });
+        }
+
+        function resetAiConversation() {
+            state.aiSessionId += 1;
+            state.aiMessages = [createAiWelcomeMessage()];
+            state.aiConversation = [];
+            state.isAiSending = false;
+            elements.aiInput.value = "";
+            syncAiAvailability();
+            renderAiMessages();
+        }
+
+        function renderAiMessages() {
+            elements.aiChatMessages.innerHTML = state.aiMessages.map((message) => `
+                <div class="ai-message ${message.role} ${message.loading ? "loading" : ""}">
+                    <div class="ai-message-label">${message.role === "user" ? "你" : "AI"}</div>
+                    <div class="ai-message-bubble">${escapeHtml(message.content)}</div>
+                </div>
+            `).join("");
+            elements.aiChatMessages.scrollTop = elements.aiChatMessages.scrollHeight;
+        }
+
+        function openAiPanel() {
+            state.aiPanelVisible = true;
+            elements.aiChatPanel.classList.add("show");
+            elements.aiChatPanel.setAttribute("aria-hidden", "false");
+            syncAiAvailability();
+            renderAiMessages();
+            requestAnimationFrame(() => {
+                applyAiPanelPosition();
+            });
+            if (aiAvailable) {
+                elements.aiInput.focus();
+            }
+        }
+
+        function closeAiPanel() {
+            stopAiDrag();
+            state.aiPanelVisible = false;
+            elements.aiChatPanel.classList.remove("show");
+            elements.aiChatPanel.setAttribute("aria-hidden", "true");
+            resetAiConversation();
+        }
+
+        async function sendAiMessage(rawMessage) {
+            const content = rawMessage.trim();
+            if (!content || state.isAiSending || !aiAvailable) {
+                return;
+            }
+
+            const sessionId = state.aiSessionId;
+            state.isAiSending = true;
+            syncAiAvailability();
+
+            const nextConversation = [...state.aiConversation, { role: "user", content }];
+            state.aiMessages = [
+                ...state.aiMessages,
+                { role: "user", content },
+                { role: "assistant", content: "正在分析你的片单，请稍等...", loading: true },
+            ];
+            elements.aiInput.value = "";
+            renderAiMessages();
+
+            try {
+                const response = await fetch("/api/ai/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ messages: nextConversation }),
+                });
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || "AI 暂时不可用。");
+                }
+
+                if (sessionId !== state.aiSessionId) {
+                    return;
+                }
+
+                state.aiConversation = [...nextConversation, { role: "assistant", content: result.message }];
+                state.aiMessages[state.aiMessages.length - 1] = {
+                    role: "assistant",
+                    content: result.message,
+                };
+                renderAiMessages();
+            } catch (error) {
+                if (sessionId !== state.aiSessionId) {
+                    return;
+                }
+
+                state.aiMessages[state.aiMessages.length - 1] = {
+                    role: "assistant",
+                    content: error.message || "AI 暂时不可用，请稍后再试。",
+                };
+                renderAiMessages();
+            } finally {
+                state.isAiSending = false;
+                syncAiAvailability();
+            }
         }
 
         function sortedMovies(movies) {
@@ -884,6 +1427,15 @@
 
         elements.copyButton.addEventListener("click", copyMovieList);
         elements.editButton.addEventListener("click", enterEditMode);
+        elements.aiChatCard.addEventListener("pointerdown", startAiDrag);
+        elements.toggleAiButton.addEventListener("click", () => {
+            if (state.aiPanelVisible) {
+                closeAiPanel();
+                return;
+            }
+            openAiPanel();
+        });
+        elements.closeAiButton.addEventListener("click", closeAiPanel);
         elements.deleteSelectedButton.addEventListener("click", deleteSelectedRows);
         elements.deleteAllButton.addEventListener("click", markAllRowsDeleted);
         elements.cancelButton.addEventListener("click", cancelEdit);
@@ -901,8 +1453,33 @@
             state.importPanelVisible = false;
             elements.importPanel.classList.remove("show");
         });
+        elements.aiChatForm.addEventListener("submit", (event) => {
+            event.preventDefault();
+            sendAiMessage(elements.aiInput.value);
+        });
+        elements.aiInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                sendAiMessage(elements.aiInput.value);
+            }
+        });
+        elements.aiSuggestionButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                sendAiMessage(button.dataset.aiPrompt || "");
+            });
+        });
         elements.submitImportButton.addEventListener("click", submitImport);
         elements.doubanPreferBrowser.addEventListener("change", syncBrowserImportControls);
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape" && state.aiPanelVisible) {
+                closeAiPanel();
+            }
+        });
+        window.addEventListener("resize", () => {
+            if (state.aiPanelVisible) {
+                applyAiPanelPosition();
+            }
+        });
 
         elements.tableBody.addEventListener("input", (event) => {
             const field = event.target.dataset.field;
@@ -928,6 +1505,7 @@
         state.movies = sortedMovies(state.movies);
         refreshBookmarklet();
         syncBrowserImportControls();
+        resetAiConversation();
         render();
         if (initialMessage) {
             showMessage(initialMessage, initialMessageType || "info");

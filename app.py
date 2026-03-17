@@ -34,6 +34,32 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def load_local_env():
+    env_path = os.path.join(BASE_DIR, ".env")
+    if not os.path.exists(env_path):
+        return
+
+    with open(env_path, "r", encoding="utf-8") as env_file:
+        for raw_line in env_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key or key in os.environ:
+                continue
+
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                value = value[1:-1]
+            os.environ[key] = value
+
+
+load_local_env()
+
 DATABASE_PATH = os.path.join(BASE_DIR, "movies.db")
 MAX_IMPORT_RECORDS = 1000
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9]{4}$")
@@ -89,6 +115,12 @@ BROWSER_APP_NAMES = {
     "chrome": "Google Chrome",
     "safari": "Safari",
 }
+
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat").strip() or "deepseek-chat"
+DEEPSEEK_REQUEST_TIMEOUT = 45
+AI_CHAT_HISTORY_LIMIT = 12
+AI_MOVIE_CONTEXT_LIMIT = 1000
 
 
 class DoubanCollectionHTMLParser(HTMLParser):
@@ -173,6 +205,11 @@ class DoubanCollectionHTMLParser(HTMLParser):
 
         if self.capture_subject_link_depth is not None:
             self.current_subject_link.append(data)
+
+
+class AIConfigurationError(ValueError):
+    """Raised when the AI feature is not fully configured."""
+
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
@@ -375,6 +412,178 @@ def list_movies(user_id):
     ).fetchall()
     connection.close()
     return [dict(row) for row in rows]
+
+
+def is_deepseek_configured():
+    return bool((os.environ.get("DEEPSEEK_API_KEY") or "").strip())
+
+
+def normalize_ai_messages(raw_messages):
+    if not isinstance(raw_messages, list):
+        raise ValueError("AI 对话格式不正确，请刷新页面后重试。")
+
+    cleaned_messages = []
+    allowed_roles = {"user", "assistant"}
+
+    for item in raw_messages[-AI_CHAT_HISTORY_LIMIT:]:
+        if not isinstance(item, dict):
+            continue
+
+        role = (item.get("role") or "").strip()
+        content = (item.get("content") or "").strip()
+
+        if role not in allowed_roles or not content:
+            continue
+
+        cleaned_messages.append(
+            {
+                "role": role,
+                "content": content[:4000],
+            }
+        )
+
+    if not cleaned_messages:
+        raise ValueError("请先输入你想让 AI 分析的问题。")
+
+    if cleaned_messages[-1]["role"] != "user":
+        raise ValueError("最后一条消息需要是你的提问。")
+
+    return cleaned_messages
+
+
+def build_movie_context_for_ai(user_id):
+    movies = list_movies(user_id)[:AI_MOVIE_CONTEXT_LIMIT]
+    total_movies = len(movies)
+
+    if not movies:
+        return (
+            "当前用户还没有保存电影记录。"
+            "如果用户请求分析口味，请先说明样本不足，再给出可执行的补充建议。"
+        )
+
+    movie_lines = [
+        f"{index + 1}. {movie['title']} / {movie['director']}"
+        for index, movie in enumerate(movies)
+    ]
+
+    return (
+        f"当前用户已保存 {total_movies} 部电影。"
+        "以下是当前已保存片单，格式为“影名 / 导演”：\n"
+        + "\n".join(movie_lines)
+    )
+
+
+def build_ai_system_prompt():
+    return (
+        "你是网站里的电影分析助手，负责根据用户当前片单做口味分析、观影总结和电影推荐。"
+        "请始终使用简体中文回复，语气自然、具体、克制，适合放在网页右下角的小型聊天窗口里。"
+        "如果用户要求推荐电影，优先推荐不在用户当前片单中的影片，每次给 3 到 5 部即可，"
+        "并为每一部写清楚为什么适合他。"
+        "如果用户要求分析片单，请总结题材偏好、导演倾向、地区风格、观影气质或明显缺口。"
+        "如果用户片单样本不够、信息不足，先明确说明判断依据有限，再继续给建议。"
+        "不要假装知道你不确定的剧情、年份或主创信息；拿不准时请直接说明。"
+        "除非用户明确要求，不要输出过长答案，也不要重复整份片单。"
+    )
+
+
+def parse_deepseek_error(error):
+    try:
+        body = error.read().decode("utf-8", errors="ignore")
+    except Exception:
+        body = ""
+
+    try:
+        payload = json.loads(body) if body else {}
+    except json.JSONDecodeError:
+        payload = {}
+
+    error_message = (
+        payload.get("error", {}).get("message")
+        or payload.get("message")
+        or body.strip()
+    )
+
+    if error.code == 401:
+        return "DeepSeek API Key 无效或已失效，请更新后重试。"
+    if error.code == 402:
+        return "DeepSeek 账户余额不足，请先充值后再试。"
+    if error.code == 429:
+        return "DeepSeek 当前请求过多，请稍后再试。"
+    if error_message:
+        return f"DeepSeek 请求失败：{error_message}"
+    return f"DeepSeek 请求失败（HTTP {error.code}）。"
+
+
+def request_deepseek_chat(messages):
+    api_key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    if not api_key:
+        raise AIConfigurationError(
+            "AI 功能已经接好，但服务器还没有配置 DeepSeek API Key。"
+            "把 `DEEPSEEK_API_KEY` 配好后，这个聊天窗就能直接使用。"
+        )
+
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": messages,
+        "temperature": 0.8,
+        "max_tokens": 900,
+    }
+    request_object = Request(
+        DEEPSEEK_API_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(request_object, timeout=DEEPSEEK_REQUEST_TIMEOUT) as response:
+            raw_body = response.read().decode("utf-8", errors="ignore")
+    except HTTPError as error:
+        raise ValueError(parse_deepseek_error(error)) from error
+    except URLError as error:
+        if isinstance(error.reason, ssl.SSLCertVerificationError):
+            insecure_context = ssl._create_unverified_context()
+            try:
+                with urlopen(
+                    request_object,
+                    timeout=DEEPSEEK_REQUEST_TIMEOUT,
+                    context=insecure_context,
+                ) as response:
+                    raw_body = response.read().decode("utf-8", errors="ignore")
+            except HTTPError as nested_error:
+                raise ValueError(parse_deepseek_error(nested_error)) from nested_error
+            except URLError as nested_error:
+                raise ValueError("暂时无法连接 DeepSeek 服务，请稍后再试。") from nested_error
+        else:
+            raise ValueError("暂时无法连接 DeepSeek 服务，请稍后再试。") from error
+
+    try:
+        response_payload = json.loads(raw_body)
+    except json.JSONDecodeError as error:
+        raise ValueError("DeepSeek 返回的数据无法解析，请稍后再试。") from error
+
+    assistant_message = (
+        response_payload.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+        .strip()
+    )
+    if not assistant_message:
+        raise ValueError("DeepSeek 没有返回可用内容，请稍后再试。")
+
+    return assistant_message
+
+
+def chat_with_movie_ai(user_id, conversation_messages):
+    messages = [
+        {"role": "system", "content": build_ai_system_prompt()},
+        {"role": "system", "content": build_movie_context_for_ai(user_id)},
+        *conversation_messages,
+    ]
+    return request_deepseek_chat(messages)
 
 
 def replace_movies(rows, user_id):
@@ -1375,6 +1584,7 @@ def home():
         "index.html",
         movies=list_movies(current_user["id"]),
         current_user=current_user,
+        ai_available=is_deepseek_configured(),
         bookmarklet_token=create_bookmarklet_token(current_user["id"]),
         initial_message=request.args.get("import_message", ""),
         initial_message_type=request.args.get("import_type", "info"),
@@ -1455,6 +1665,22 @@ def logout():
 @api_login_required
 def movies_api(current_user):
     return jsonify({"movies": list_movies(current_user["id"])})
+
+
+@app.post("/api/ai/chat")
+@api_login_required
+def ai_chat(current_user):
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        conversation_messages = normalize_ai_messages(payload.get("messages", []))
+        message = chat_with_movie_ai(current_user["id"], conversation_messages)
+    except AIConfigurationError as error:
+        return jsonify({"error": str(error)}), 503
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+    return jsonify({"message": message})
 
 
 @app.post("/api/movies/save")
